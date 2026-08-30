@@ -1,0 +1,50 @@
+{
+  "id": "vault-gardener",
+  "name": "库园丁",
+  "nameEn": "Vault Gardener",
+  "version": "1.1.1",
+  "apiVersion": 1,
+  "description": "库治理工作台:扫全库找出坏 wikilink、标签大小写/层级变体、frontmatter 缺字段,以及你自己发起的全库字面查找替换与标签操作(改名 / 合并 / 层级重构);每一条都先给出逐行前后对照的 diff,你点「批准并写入」才落盘。写入一次一条一文件,改前先存逐字节快照,写后立刻读回自校验,不一致当场回滚;全程记活动日志与撤销台账,history 视图可逐条回滚。提案全部由插件自己用确定性规则算出,不发给任何模型,数据不出本机。",
+  "descriptionEn": "A vault-maintenance workbench: it scans your whole vault for broken wikilinks, tag case/hierarchy variants, missing frontmatter keys, plus literal find-and-replace and tag operations (rename / merge / restructure) you start yourself. Every finding is shown as a line-by-line before/after diff, and nothing is written until you approve that one item. Writes happen one file at a time, after a byte-exact snapshot is stored, and are read back and verified — a mismatch is rolled back on the spot. Every apply is journalled so the history view can undo it. All proposals are computed locally by deterministic rules; no model is ever called and no data leaves your machine.",
+  "main": "main.js",
+  "events": [
+    { "name": "scan", "label": "扫描全库" },
+    { "name": "apply", "label": "批准并写入一条提案" },
+    { "name": "rollback", "label": "回滚一次写入" }
+  ],
+  "onboarding": {
+    "intro": "库园丁扫全库、逐条给出前后逐字节 diff,你点批准才落盘。所有提案由插件自己用确定性规则算出——不接 AI,因为「diff 可逐字节复核」这条承诺一旦交给模型转述就当场破产。",
+    "steps": [
+      {
+        "title": "先扫一遍",
+        "description": "命令面板「库园丁:扫描全库」,或在 inbox 视图点「扫描全库」。默认开三条规则:坏 wikilink 修复、标签变体归一、frontmatter 补缺字段(补缺字段默认关闭,要在设置里填「必填字段」才生效)。只扫裸 .md,跳过点开头目录、插件自定义文件类型与插件自己的工作文件夹。"
+      },
+      {
+        "title": "逐条看 diff 再批准",
+        "description": "在 inbox 里点一条提案会跳到 diff 视图,逐行看改前改后。确认无误点「批准并写入」——只有这一步会写你的文件,而且一次只写一个文件。没有「全部应用」按钮,这是刻意的。"
+      },
+      {
+        "title": "后悔了就回滚",
+        "description": "history 视图按天列出所有已写入的条目,每条都能一键回滚(用改前的逐字节快照还原)。若文件在应用之后又被你编辑过,回滚会被拒绝并说明原因,不会吃掉你的后续编辑。撤销快照存在工作文件夹的 .gardener-undo/ 里,要清理请自行在文件管理器里删。"
+      }
+    ],
+    "en": {
+      "intro": "Vault Gardener scans your whole vault and shows every proposed change as a byte-exact diff; nothing is written until you approve that item. All proposals are computed locally by deterministic rules — no AI, because a promise of \"you can verify the diff byte by byte\" dies the moment a model paraphrases it.",
+      "steps": [
+        {
+          "title": "Run a scan first",
+          "description": "Use the command palette entry \"Vault Gardener: Scan vault\", or press \"Scan vault\" in the inbox view. Three rules are on by default: broken wikilink repair, tag variant normalisation, and missing frontmatter keys (that last one stays off until you list required keys in settings). Only plain .md files are scanned; dot-folders, plugin file types and the plugin's own work folder are skipped."
+        },
+        {
+          "title": "Review each diff, then approve",
+          "description": "Clicking a proposal in the inbox opens the diff view with the before/after lines. Approve it and that single file is written — nothing else. There is deliberately no \"apply all\" button."
+        },
+        {
+          "title": "Roll back if you regret it",
+          "description": "The history view lists every applied entry by day, and each one can be rolled back from the byte-exact pre-image snapshot. If the file changed again after the apply, the rollback is refused with a reason so your later edits are never eaten. Snapshots live in .gardener-undo/ inside the work folder; delete that folder yourself if you want the space back."
+        }
+      ]
+    },
+    "settings": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "vault-gardener",
+  "name": { "zh": "库园丁", "en": "Vault Gardener" },
+  "icon": "list-tree",
+  "version": "1.0.0",
+  "layout": {
+    "left": [{ "type": "plugin:vault-gardener:inbox" }],
+    "main": [{ "type": "plugin:vault-gardener:diff" }],
+    "right": [{ "type": "plugin:vault-gardener:history" }]
+  },
+  "requires": {
+    "views": ["plugin:vault-gardener:inbox", "plugin:vault-gardener:diff", "plugin:vault-gardener:history"]
+  }
+}
