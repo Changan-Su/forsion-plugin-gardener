@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Vault Gardener — Vault sprout</title>
+  <!-- Original Forsion plugin identity artwork, 2026-10-05. -->
+  <defs><linearGradient id="tile" x1="28" y1="12" x2="222" y2="252" gradientUnits="userSpaceOnUse"><stop stop-color="#4a5140"/><stop offset="1" stop-color="#2d3327"/></linearGradient></defs>
+  <rect x="4" y="4" width="248" height="248" rx="58" fill="url(#tile)"/>
+  <g style="--ink:#f4eed9;--accent:#b4c791;--cut:#2d3327" fill="none" stroke="var(--ink)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M127 139V107M128 119Q104 77 72 71" stroke-width="10"/>
+    <path d="M126 111Q91 113 75 76Q69 64 62 57Q115 56 126 111Z" fill="var(--ink)" stroke="none"/>
+    <path d="M132 106Q132 54 194 49Q186 99 132 106Z" fill="var(--accent)" stroke="none"/>
+    <path d="M64 148H192L179 195Q175 210 159 210H97Q81 210 77 195Z" fill="var(--ink)" stroke="none"/>
+    <path d="M59 143h138" stroke-width="15"/>
+  </g>
+</svg>

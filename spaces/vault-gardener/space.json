@@ -2,6 +2,7 @@
   "id": "vault-gardener",
   "name": { "zh": "库园丁", "en": "Vault Gardener" },
   "icon": "list-tree",
+  "iconFile": "icon.png",
   "version": "1.0.0",
   "layout": {
     "left": [{ "type": "plugin:vault-gardener:inbox" }],
