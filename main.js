@@ -1779,28 +1779,28 @@ const STYLE = `
 .vg-label{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted, #8a8a8a)}
 .vg-mut{color:var(--text-muted, #8a8a8a);font-size:12px}
 .vg-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.vg-btn{padding:6px 12px;font:inherit;font-size:12.5px;color:var(--text-light, var(--text, currentColor));background:var(--bg-card, rgba(128,128,128,.10));border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-md, 10px);cursor:pointer;white-space:nowrap}
+.vg-btn{padding:6px 12px;font:inherit;font-size:12.5px;color:var(--text-light, var(--text, currentColor));background:var(--bg-card, rgba(128,128,128,.10));border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-sm);cursor:pointer;white-space:nowrap}
 .vg-btn:hover:not(:disabled){background:var(--accent-light, rgba(128,128,128,.16))}
 .vg-btn:disabled{opacity:.55;cursor:default}
 .vg-btn.primary{color:var(--on-accent, #fdfdfc);background:var(--accent, #4c2585);border-color:transparent;font-weight:550}
-.vg-btn.sm{padding:3px 9px;font-size:11.5px;border-radius:var(--radius-sm, 8px)}
+.vg-btn.sm{padding:3px 9px;font-size:11.5px;border-radius:var(--radius-sm)}
 .vg-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.vg-chip{padding:4px 10px;font:inherit;font-size:12px;border-radius:999px;cursor:pointer;color:var(--text-muted, #8a8a8a);background:var(--bg-card, rgba(128,128,128,.10));border:1px solid var(--border, rgba(128,128,128,.30))}
+.vg-chip{padding:4px 10px;font:inherit;font-size:12px;border-radius:var(--radius-pill, 999px);cursor:pointer;color:var(--text-muted, #8a8a8a);background:var(--bg-card, rgba(128,128,128,.10));border:1px solid var(--border, rgba(128,128,128,.30))}
 .vg-chip.on{color:var(--accent, currentColor);background:var(--accent-light, rgba(128,128,128,.16));border-color:var(--accent, currentColor)}
-.vg-card{border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-md, 10px);background:var(--bg-card, rgba(128,128,128,.06));padding:10px 12px}
+.vg-card{border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-md);background:var(--bg-card, rgba(128,128,128,.06));padding:10px 12px}
 .vg-sec{display:flex;flex-direction:column;gap:6px}
 .vg-form{display:flex;flex-direction:column;gap:8px}
 .vg-frow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.vg-in{flex:1;min-width:150px;padding:6px 10px;font:inherit;font-size:12.5px;color:var(--text, currentColor);background:var(--bg, transparent);border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-sm, 8px);outline:none}
+.vg-in{flex:1;min-width:150px;padding:6px 10px;font:inherit;font-size:12.5px;color:var(--text, currentColor);background:var(--bg, transparent);border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-sm);outline:none}
 .vg-ck{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-light, var(--text, currentColor));cursor:pointer}
-.vg-item{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;padding:7px 10px;border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-sm, 8px);background:var(--bg-card, rgba(128,128,128,.06));cursor:pointer}
+.vg-item{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;padding:7px 10px;border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-md);background:var(--bg-card, rgba(128,128,128,.06));cursor:pointer}
 .vg-item.on{border-color:var(--accent, currentColor);background:var(--accent-light, rgba(128,128,128,.16))}
 .vg-path{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text, currentColor);word-break:break-all}
-.vg-tag{font-size:11px;padding:1px 7px;border-radius:999px;color:var(--text-muted, #8a8a8a);background:var(--accent-light, rgba(128,128,128,.14))}
+.vg-tag{font-size:11px;padding:1px 7px;border-radius:var(--radius-pill, 999px);color:var(--text-muted, #8a8a8a);background:var(--accent-light, rgba(128,128,128,.14))}
 .vg-empty{padding:16px 4px;color:var(--text-muted, #8a8a8a);font-size:12.5px}
-.vg-note{padding:8px 11px;border-radius:var(--radius-sm, 8px);border:1px solid var(--border, rgba(128,128,128,.30));background:var(--accent-light, rgba(128,128,128,.10));font-size:12.5px;color:var(--text, currentColor)}
+.vg-note{padding:8px 11px;border-radius:var(--radius-md);border:1px solid var(--border, rgba(128,128,128,.30));background:var(--accent-light, rgba(128,128,128,.10));font-size:12.5px;color:var(--text, currentColor)}
 .vg-note.bad{border-color:var(--danger, #a3503f);color:var(--danger, #a3503f);background:transparent}
-.vg-diff{border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-sm, 8px);overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+.vg-diff{border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-sm);overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 .vg-dline{display:flex;gap:8px;padding:1px 8px;white-space:pre-wrap;word-break:break-word}
 .vg-dline.add{background:color-mix(in srgb, var(--green, #4f6f52) 16%, transparent)}
 .vg-dline.del{background:color-mix(in srgb, var(--danger, #a3503f) 16%, transparent)}
@@ -1809,7 +1809,7 @@ const STYLE = `
 .vg-dline.add .vg-dsign{color:var(--green, #4f6f52)}
 .vg-dline.del .vg-dsign{color:var(--danger, #a3503f)}
 .vg-dtext{flex:1;min-width:0;color:var(--text, currentColor)}
-.vg-snap{max-height:260px;overflow:auto;padding:8px 10px;border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-sm, 8px);white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--text, currentColor);background:var(--bg-card, rgba(128,128,128,.06))}
+.vg-snap{max-height:260px;overflow:auto;padding:8px 10px;border:1px solid var(--border, rgba(128,128,128,.30));border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--text, currentColor);background:var(--bg-card, rgba(128,128,128,.06))}
 .vg-day{margin-top:6px}
 `
 
