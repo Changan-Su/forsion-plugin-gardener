@@ -1405,6 +1405,220 @@ A.ok(!/getPage\s*\(/.test(src), '文本层插件不需要 getPage')
   A.ok(T.dayKey(y2) > T.dayKey(y1), '跨年日键仍可字典序排序')
 }
 
+// ══ ⑧b 插件数据文件夹(ctx.storage,1.2.0) ═════════════════════════════════════
+// 假数据层:内存 Map;importFromVault 照宿主语义从内存 vault 复制(只复制不挪、同名不同内容 → skipped)。
+function mkStorage(vault, o) {
+  const opt = o || {}
+  const files = new Map()
+  const imports = []
+  const writes = []
+  const done = new Set()
+  const layer = {
+    files, imports, writes,
+    readText: async (p) => {
+      if (opt.rejectRead && opt.rejectRead(p)) throw new Error('EIO ' + p)
+      return files.has(p) ? files.get(p) : null
+    },
+    write: async (p, d) => { writes.push(p); files.set(p, String(d)) },
+    list: async (dir) => [...files.keys()].filter((k) => k.startsWith(dir + '/') && !k.slice(dir.length + 1).includes('/'))
+      .sort().map((k) => ({ name: k.split('/').pop(), path: k, kind: 'file', size: files.get(k).length, mtime: 0 })),
+    importFromVault: async ({ id, from, to }) => {
+      imports.push({ id, from, to })
+      if (opt.rejectImport) throw new Error('Unrecognised import record')
+      if (done.has(id)) return { status: 'already-done', copied: 0, skipped: [] }
+      const single = vault.map.has(from)
+      const src = single ? [from] : [...vault.map.keys()].filter((k) => k.startsWith(from + '/'))
+      if (!src.length) return { status: 'missing', copied: 0, skipped: [] }
+      let copied = 0
+      const skipped = []
+      for (const k of src) {
+        const dest = single ? to : [to, k.slice(from.length + 1)].filter(Boolean).join('/')
+        if (files.has(dest) && files.get(dest) !== vault.map.get(k)) { skipped.push(dest); continue }
+        files.set(dest, vault.map.get(k)); copied++
+      }
+      done.add(id)
+      return { status: 'complete', copied, skipped }
+    },
+  }
+  return { layer, storage: { vault: () => (opt.vaultNull && opt.vaultNull() ? null : layer) } }
+}
+async function bootStored(o) {
+  const c = mkCtx({ pages: o.pages || {} })
+  for (const [k, v] of Object.entries(o.vaultFiles || {})) c.vault.map.set(k, v)
+  const st = mkStorage(c.vault, o.storage)
+  c.storage = st.storage
+  const inst = load(c)
+  await inst.T.ensureLoaded().catch(() => {})
+  return { c, st, ...inst }
+}
+{
+  // ① 旧数据复制进来;老台账里记的库内快照路径照样能回滚;库里原件一个不删
+  const oldSnap = '库园丁/.gardener-undo/s-1/op-a.snap'
+  const before = '# 旧\nfoo\n'
+  const after = '# 旧\nbar\n'
+  const ledger = { v: 1, entries: [{ op: 'op-a', at: 1, scanId: 's-1', path: '笔记/旧.md', rule: 'find-replace', preHash: T.hashText(before), postHash: T.hashText(after), snap: oldSnap, status: 'applied', hits: 1 }] }
+  const vaultFiles = { '库园丁/.gardener/ledger.json': JSON.stringify(ledger), [oldSnap]: before }
+  const e = await bootStored({ pages: { '笔记/旧.md': after, '笔记/新.md': 'hello foo\n' }, vaultFiles })
+  A.deepEqual(e.st.layer.imports.map((x) => [x.id, x.from, x.to]), [
+    ['gardener-ledger-v1', '库园丁/.gardener/ledger.json', 'ledger-legacy.json'],
+    ['gardener-queue-v1', '库园丁/.gardener/queue.json', 'queue.json'],
+    ['gardener-undo-v1', '库园丁/.gardener-undo', 'undo'],
+  ], '逐个文件复制:id 固定、from 在工作文件夹里')
+  A.equal(e.T.state.dataError, null)
+  A.equal(e.T.state.ledger.entries.length, 1, '台账从插件数据读回')
+  A.equal(e.st.layer.files.get('undo/s-1/op-a.snap'), before, '旧快照复制到 undo/')
+  const rb = await e.T.rollbackOp(e.T.state.ledger.entries[0])
+  A.equal(rb.ok, true, `老台账的快照路径要能回滚,实得 ${JSON.stringify(rb)}`)
+  A.equal(e.c.vault.map.get('笔记/旧.md'), before)
+  for (const k of Object.keys(vaultFiles)) A.ok(e.c.vault.map.has(k), `库里原件 ${k} 不许删`)
+  // 新写入:快照、台账、队列全进插件数据,库里的 .gardener* 一个字节都不再写
+  const w0 = e.c.vault.writes.length
+  await e.T.runScan({ find: 'foo', to: 'baz', caseSensitive: false, wholeWord: false, includeCode: false })
+  const fp = e.T.state.queue.proposals.find((x) => x.path === '笔记/新.md')
+  A.ok(fp, '查找替换应出提案')
+  A.equal((await e.T.applyProposal(fp)).ok, true)
+  const vw = e.c.vault.writes.slice(w0)
+  A.ok(!vw.some((x) => x.includes('/.gardener')), `库里不许再写 .gardener*,实写 ${vw.join(',')}`)
+  A.ok(e.st.layer.files.has('queue.json') && e.st.layer.files.has('ledger.json'), '队列与台账落在插件数据')
+  const ent = e.T.state.ledger.entries[e.T.state.ledger.entries.length - 1]
+  A.ok(/^undo\/s-\d+-\d+\/op-[0-9a-z-]+\.snap$/.test(ent.snap), `新快照引用是数据层相对路径,实得 ${ent.snap}`)
+  A.equal(e.st.layer.files.get(ent.snap), 'hello foo\n', '新快照 = 改前原文')
+  A.equal((await e.T.rollbackOp(ent)).ok, true, '新快照能回滚')
+  e.dispose()
+}
+{
+  // ② 快照没复制进来(被跳过 / 还在库里)→ 回滚退回去读库里的原件;跳过的个数要告诉用户
+  const oldSnap = '库园丁/.gardener-undo/s-1/op-b.snap'
+  const before = 'x\n'
+  const after = 'y\n'
+  const ledger = { v: 1, entries: [{ op: 'op-b', at: 1, scanId: 's-1', path: '笔记/b.md', rule: 'find-replace', preHash: T.hashText(before), postHash: T.hashText(after), snap: oldSnap, status: 'applied', hits: 1 }] }
+  const e = await (async () => {
+    const c = mkCtx({ pages: { '笔记/b.md': after } })
+    c.vault.map.set('库园丁/.gardener/ledger.json', JSON.stringify(ledger))
+    c.vault.map.set(oldSnap, before)
+    const st = mkStorage(c.vault)
+    st.layer.files.set('undo/s-1/op-b.snap', 'something else\n') // 数据层里已有同名不同内容 → 跳过
+    c.storage = st.storage
+    const inst = load(c)
+    await inst.T.ensureLoaded().catch(() => {})
+    return { c, st, ...inst }
+  })()
+  A.ok(e.T.state.importNote && e.T.state.importNote.vars.n === 1, '跳过 1 个要记下来给用户看')
+  // 数据层那份内容不对(哈希不符)、库里原件也坏了 → 守卫拒绝,绝不拿错的快照覆盖用户文件
+  e.c.vault.map.set(oldSnap, 'also wrong\n')
+  const r = await e.T.rollbackOp(e.T.state.ledger.entries[0])
+  A.equal(r.ok, false)
+  A.equal(r.key, 'msgRollbackBadSnap')
+  // 数据层那份被跳过(内容不同)而库里原件是对的 → 按改前哈希挑库里那份
+  e.c.vault.map.set(oldSnap, before)
+  A.equal((await e.T.rollbackOp(e.T.state.ledger.entries[0])).ok, true, '数据层那份不对 → 读库里的原件回滚')
+  e.dispose()
+}
+{
+  // ②b 同步先送到 queue、后送到 ledger;新版先写过台账 → 旧台账照样并进来,不被「跳过」挤掉
+  const c = mkCtx({ pages: {} })
+  c.vault.map.set('库园丁/.gardener/queue.json', '{"v":1,"scanId":"s-1","proposals":[],"todos":[]}')
+  const st = mkStorage(c.vault)
+  st.layer.files.set('ledger.json', JSON.stringify({ v: 1, entries: [{ op: 'op-new', snap: 'undo/s-9/op-new.snap', status: 'applied' }] }))
+  c.storage = st.storage
+  let inst = load(c)
+  await inst.T.ensureLoaded().catch(() => {})
+  A.equal(inst.T.state.ledger.entries.length, 1, '旧台账还没到')
+  inst.dispose()
+  c.vault.map.set('库园丁/.gardener/ledger.json', JSON.stringify({ v: 1, entries: [{ op: 'op-old', snap: '库园丁/.gardener-undo/s-1/op-old.snap', status: 'applied' }] }))
+  inst = load(c)
+  await inst.T.ensureLoaded().catch(() => {})
+  A.deepEqual(inst.T.state.ledger.entries.map((x) => x.op), ['op-old', 'op-new'], '后到的旧台账并进来,旧的在前')
+  A.deepEqual(JSON.parse(st.layer.files.get('ledger.json')).entries.map((x) => x.op), ['op-old', 'op-new'], '合并结果落盘')
+  inst.dispose()
+  inst = load(c)
+  await inst.T.ensureLoaded().catch(() => {})
+  A.equal(inst.T.state.ledger.entries.length, 2, '再加载不重复合并')
+  inst.dispose()
+}
+{
+  // ②c 换库:内存里上一个库的台账不许写进新库
+  let root = '/v/A'
+  const c = mkCtx({ pages: { 'n.md': 'foo\n' } })
+  c.app.vaultRoot = () => root
+  const st = mkStorage(c.vault)
+  st.layer.files.set('ledger.json', JSON.stringify({ v: 1, entries: [{ op: 'op-a', snap: 'undo/s/op-a.snap', status: 'applied', path: 'n.md' }] }))
+  c.storage = st.storage
+  const inst = load(c)
+  await inst.T.ensureLoaded().catch(() => {})
+  root = '/v/B'
+  const before = st.layer.files.get('ledger.json')
+  const r = await inst.T.applyProposal({ id: 'op-z', path: 'n.md', preHash: inst.T.hashText('foo\n'), rule: 'find-replace', params: {}, hits: [], state: 'open' })
+  A.equal(r.key, 'msgLibraryChanged', '换库后先重读,这一次不写')
+  A.equal(st.layer.files.get('ledger.json'), before, '台账没被上一个库的内存盖掉')
+  inst.dispose()
+}
+{
+  // ②d 旧宿主:台账读失败(reject)照 1.1.x —— 队列照样在、扫描照样能跑
+  const c = mkCtx({ pages: { 'n.md': 'foo\n' } })
+  c.vault.map.set('库园丁/.gardener/queue.json', JSON.stringify({ v: 1, scanId: 's-1', proposals: [], todos: [] }))
+  const rf = c.app.readFile
+  c.app.readFile = (p) => (p.endsWith('ledger.json') ? Promise.reject(new Error('EIO')) : rf(p))
+  const inst = load(c)
+  await inst.T.ensureLoaded().catch(() => {})
+  A.equal(inst.T.state.dataError, null, '旧宿主不进停用态')
+  A.ok(inst.T.state.queue, '已读到的队列留着')
+  inst.dispose()
+}
+{
+  // ③ 库还没就绪(vault() 为 null)→ 等,不往库里退,也不写任何东西
+  let ready = false
+  const e = await bootStored({ pages: { 'a.md': 'foo\n' }, storage: { vaultNull: () => !ready } })
+  A.ok(e.T.state.dataError && e.T.state.dataError.wait, 'vault() 为 null → 等待态')
+  A.equal(e.c.vault.writes.length, 0, '等待期间库里零写入')
+  const r = await e.T.applyProposal({ id: 'op-x', path: 'a.md', preHash: e.T.hashText('foo\n'), rule: 'find-replace', params: {}, hits: [], state: 'open' })
+  A.equal(r.key, 'msgDataError', '等待期间批准一律拒绝')
+  ready = true
+  await e.T.ensureLoaded()
+  A.equal(e.T.state.dataError, null, '库就绪后再加载就好了')
+  e.dispose()
+}
+{
+  // ④ 台账读失败(reject)→ 停用;绝不拿空台账写回
+  const ledger = { v: 1, entries: [{ op: 'op-c', snap: 'undo/s/op-c.snap', status: 'applied', path: 'p.md' }] }
+  const e = await bootStored({ pages: { 'p.md': 'foo\n' }, storage: { rejectRead: (p) => p === 'ledger.json' } })
+  e.st.layer.files.set('ledger.json', JSON.stringify(ledger))
+  A.ok(e.T.state.dataError && !e.T.state.dataError.wait, '读失败 → 错误态(不是等待)')
+  await e.T.runScan({ find: 'foo', to: 'bar', caseSensitive: false, wholeWord: false, includeCode: false })
+  A.equal(e.T.state.queue, null, '读失败时不扫描')
+  const r = await e.T.applyProposal({ id: 'op-y', path: 'p.md', preHash: e.T.hashText('foo\n'), rule: 'find-replace', params: {}, hits: [], state: 'open' })
+  A.equal(r.key, 'msgDataError')
+  A.equal(e.st.layer.files.get('ledger.json'), JSON.stringify(ledger), '台账原样不动')
+  A.ok(!e.st.layer.writes.includes('ledger.json'), '一次都没写台账')
+  // 界面要把它画出来(带重试)
+  const host = mkEl('div')
+  e.T.mountView(host, 'inbox')
+  A.ok(String(host.textContent).includes(e.T.t('msgDataError', { msg: '' }).slice(0, 8)), 'inbox 要画出读失败提示')
+  A.ok(findByText(host, e.T.t('btnRetry')), '带重试按钮')
+  e.dispose()
+}
+{
+  // ⑤ 复制旧数据被拒(完成记录认不得)→ 停用,不当「没做过」
+  const e = await bootStored({ pages: {}, vaultFiles: { '库园丁/.gardener/ledger.json': '{"v":1,"entries":[]}' }, storage: { rejectImport: true } })
+  A.ok(e.T.state.dataError && !e.T.state.dataError.wait, 'importFromVault reject → 停用')
+  e.dispose()
+}
+{
+  // ⑥ 库里什么都没有(missing)→ 正常用,不报错;损坏的台账 → 停用
+  const e = await bootStored({ pages: {} })
+  A.equal(e.T.state.dataError, null, 'missing 不是错误')
+  A.equal(e.T.state.importNote, null)
+  e.dispose()
+  const c = mkCtx({ pages: {} })
+  const st = mkStorage(c.vault)
+  st.layer.files.set('ledger.json', '{oops')
+  c.storage = st.storage
+  const inst = load(c)
+  await inst.T.ensureLoaded().catch(() => {})
+  A.ok(inst.T.state.dataError, '损坏的台账 → 停用,不当空')
+  inst.dispose()
+}
+
 // ══ ⑨ 22. 源码级红线 ════════════════════════════════════════════════════════
 A.ok(!/^\s*(import|export)\s/m.test(src), 'main.js 不许有顶层 import/export(裸 setup 体)')
 A.ok(!/#fff/i.test(src), '不许写死 #fff')
