@@ -1535,6 +1535,8 @@ async function bootStored(o) {
   await inst.T.ensureLoaded().catch(() => {})
   A.equal(inst.T.state.ledger.entries.length, 2, '再加载不重复合并')
   inst.dispose()
+  A.equal(inst.T.mergeLegacyLedger([{ op: 'op-1', scanId: 's-2' }], [{ op: 'op-1', scanId: 's-1' }]).length, 2, '同一操作号、不同扫描 = 两条,不许并掉')
+  A.equal(inst.T.mergeLegacyLedger([{ op: 'op-1', scanId: 's-1' }], [{ op: 'op-1', scanId: 's-1' }]), null, '同扫描同操作号 = 同一条')
 }
 {
   // ②c 换库:内存里上一个库的台账不许写进新库

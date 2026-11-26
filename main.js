@@ -1434,11 +1434,13 @@ async function importOld(L) {
   }
   return skipped
 }
-/** 旧台账并进当前台账:按操作号去重,旧的排在前面。返回合并后的条目;没有要并的 → null。 */
+/** 旧台账并进当前台账:按扫描号 + 操作号去重,旧的排在前面。返回合并后的条目;没有要并的 → null。 */
 function mergeLegacyLedger(cur, legacy) {
+  // 操作号只在一次扫描里唯一:按「扫描号 + 操作号」认同一条
+  const k = (e) => `${e.scanId || ''}\n${e.op}`
   const have = Object.create(null)
-  for (const e of cur) if (e && e.op) have[e.op] = true
-  const add = legacy.filter((e) => e && e.op && !have[e.op])
+  for (const e of cur) if (e && e.op) have[k(e)] = true
+  const add = legacy.filter((e) => e && e.op && !have[k(e)])
   return add.length ? add.concat(cur) : null
 }
 
@@ -2650,6 +2652,7 @@ if (globalThis.__VAULT_GARDENER_TEST__) {
     queuePath, ledgerPath, snapPath, reportPath, undoDir, pendingCount, loadDiff, mountView, renderView,
     hitCount, later, writeReport, applyProposalInner, rollbackOpInner,
     activePagePath, blockedByActivePage, ACTIVE_UNKNOWN,
+    mergeLegacyLedger,
     scanFmTags, tagOpTarget, tagOpHits, applyTagOps, dedupeFmTags, validateTagName, validateTagOpSpec,
   })
 }
