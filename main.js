@@ -146,6 +146,13 @@ const MSG = {
     msgFailedRolled: '写后自校验不一致,已自动回滚到改前内容:{path}',
     msgFailedHardOp: '写入与回滚都校验失败,本次会话已停止一切后续写入。操作 {op},快照在 {snap}',
     msgHalted: '本次会话已因一次写入失败而停止写入,请重开 Forsion 后再试。',
+    msgStorageWait: '正在等笔记库打开,打开后自动读取撤销台账。',
+    msgDataError: '读不出插件数据里的撤销台账或队列,已暂停扫描、批准和回滚,免得用空台账覆盖它:{msg}',
+    msgDataCorrupt: '插件数据里的 {file} 内容损坏',
+    msgImportSkipped: '库里的旧数据有 {n} 个文件没复制进插件数据(插件数据里已有同名、内容不同的文件,保留了现有的)。库里的原件还在。',
+    btnRetry: '重试',
+    msgLibraryChanged: '笔记库换过了,已重新读取这个库的撤销台账,请再操作一次。',
+    storagePath: '插件数据文件夹的 {path}',
     msgActivePage: '这个文件正开在编辑器里:{path}。编辑器手上有一份更新的副本,它下一次自动保存会把整篇盖回去 —— 那样改动会凭空消失而台账却记着成功。已拒绝写入,一个字节都没碰。请先关掉这篇笔记(或切到别的标签页)再回来批准。',
     msgApplyError: '写入过程出错:{msg}',
     histTitle: '撤销台账',
@@ -300,6 +307,13 @@ const MSG = {
     msgFailedRolled: 'Verification after writing failed, so the file was rolled back to its previous content: {path}',
     msgFailedHardOp: 'Both the write and the rollback failed verification. All further writes are stopped for this session. Operation {op}, snapshot at {snap}',
     msgHalted: 'Writing is stopped for this session after a failed write. Restart Forsion before trying again.',
+    msgStorageWait: 'Waiting for the vault to open. The undo ledger loads once it does.',
+    msgDataError: "The undo ledger or queue in the plugin data folder can't be read, so scanning, applying and rolling back are paused to avoid overwriting it: {msg}",
+    msgDataCorrupt: '{file} in the plugin data folder is damaged',
+    msgImportSkipped: "{n} old files from the vault weren't copied into the plugin data folder (files with the same name and different content are already there, and were kept). The originals are still in the vault.",
+    btnRetry: 'Retry',
+    msgLibraryChanged: 'The vault changed, so its own undo ledger was reloaded. Try again.',
+    storagePath: '{path} in the plugin data folder',
     msgActivePage: 'That file is open in the editor right now: {path}. The editor holds a fresher copy and its next autosave would overwrite the whole note — the change would vanish while the journal claimed success. The write was refused and not a single byte was touched. Close that note (or switch to another tab) and come back to approve it.',
     msgApplyError: 'The write failed: {msg}',
     histTitle: 'Undo journal',
@@ -1334,6 +1348,102 @@ const undoDir = () => `${wfRoot()}/.gardener-undo`
 const snapPath = (scanId, opId) => `${undoDir()}/${scanId}/${opId}.snap`
 const reportPath = (day) => `${wfRoot()}/Reports/audit-${day}.md`
 
+// ══ 插件数据文件夹(ctx.storage,宿主 2026-11-26+) ═══════════════════════════════
+// 队列、台账、撤销快照都是插件自己的东西(卸载后你不会想在库里看到它们),而且只对当前这个库有意义
+// → 放进 `ctx.storage.vault()`:queue.json / ledger.json / undo/<扫描号>/<操作号>.snap。
+// 规矩(别改):
+//   · 没有 ctx.storage(旧宿主、网页)→ 退回 1.1.x 的库内路径,行为与从前逐字节相同。
+//   · 有 ctx.storage 但 vault() 为 null(库还在恢复 / 没开库)→ 等,**绝不退回库里写**,否则数据劈成两半。
+//   · 数据层每次用时再取,不缓存(换库后旧的那层会 reject)。
+//   · 读失败(reject)≠ 文件不存在(null):台账 / 队列读不出来就停用整个插件并说清楚,绝不拿空台账往下走。
+//   · 库里的旧文件只复制(importFromVault),原件留给用户自己删;老台账里记的库内快照路径照样能回滚。
+const OLD_DATA_DIR = '.gardener'
+const OLD_UNDO_DIR = '.gardener-undo'
+const UNDO_REL = 'undo'
+const QUEUE_REL = 'queue.json'
+const LEDGER_REL = 'ledger.json'
+// 逐个文件复制(不按整个 .gardener/ 复制):同步可能先送到 queue.json、后送到 ledger.json,整目录复制会在
+// 只有 queue 时就记成「完成」,台账永远进不来。旧台账落到 ledger-legacy.json,每次加载并进 ledger.json
+// (按操作号去重),所以新版先写过台账也不会把旧台账挤成「跳过」、旧的撤销历史照样能回滚。
+const LEGACY_LEDGER_REL = 'ledger-legacy.json'
+const IMPORTS = [
+  { id: 'gardener-ledger-v1', from: `${OLD_DATA_DIR}/ledger.json`, to: LEGACY_LEDGER_REL },
+  { id: 'gardener-queue-v1', from: `${OLD_DATA_DIR}/queue.json`, to: QUEUE_REL },
+  { id: 'gardener-undo-v1', from: OLD_UNDO_DIR, to: UNDO_REL },
+]
+const libraryKey = () => { try { return (ctx.app && ctx.app.vaultRoot && ctx.app.vaultRoot()) || '' } catch { return '' } }
+const hasStorage = () => !!(ctx.storage && typeof ctx.storage.vault === 'function')
+/** null = 旧宿主,走库内路径;否则当前库的数据层。库没就绪 → 抛 code 'storage-wait'。 */
+function dataLayer() {
+  if (!hasStorage()) return null
+  let v = null
+  try { v = ctx.storage.vault() } catch { v = null }
+  if (!v) throw Object.assign(new Error(t('msgStorageWait')), { code: 'storage-wait' })
+  return v
+}
+/** 快照引用:新宿主上是数据层里的相对路径 `undo/…`,旧宿主上是库内路径。台账里记的就是它。 */
+function snapRef(scanId, opId) {
+  return hasStorage() ? `${UNDO_REL}/${scanId}/${opId}.snap` : snapPath(scanId, opId)
+}
+/** 台账里的快照引用 → 数据层相对路径。老台账记的是 `<工作文件夹>/.gardener-undo/…`(工作文件夹可能已改过名),
+ *  复制进来以后落在 `undo/…`。认不出来 → null。 */
+function snapRel(ref) {
+  const s = String(ref || '')
+  // 先认老格式(工作文件夹本身可能就叫 undo/…)
+  const mark = `${OLD_UNDO_DIR}/`
+  const i = s.lastIndexOf(mark)
+  if (i === 0 || (i > 0 && s[i - 1] === '/')) return `${UNDO_REL}/${s.slice(i + mark.length)}`
+  if (s.indexOf(`${UNDO_REL}/`) === 0) return s
+  return null
+}
+const isLegacyRef = (ref) => { const r = snapRel(ref); return !!r && r !== String(ref || '') }
+/** 读快照:数据层优先;老台账里的库内路径在数据层找不到时(还没复制 / 复制被跳过)再去库里读那份原件。 */
+async function readSnap(ref, wantHash) {
+  const L = dataLayer()
+  if (!L) return rdFile(ref)
+  const rel = snapRel(ref)
+  let x = null
+  if (rel) x = await L.readText(rel)
+  if (!isLegacyRef(ref)) return x
+  // 老台账的库内路径:数据层那份不对(复制时被跳过、内容不同)或还没有 → 读库里的原件
+  if (x != null && (!wantHash || hashText(x) === wantHash)) return x
+  const orig = await rdFile(ref)
+  return orig != null ? orig : x
+}
+function writeSnap(ref, text) {
+  const L = dataLayer()
+  if (!L) return wrFile(ref, text)
+  return L.write(snapRel(ref) || String(ref), text)
+}
+function readData(rel, vaultPath) {
+  const L = dataLayer()
+  return L ? L.readText(rel) : rdFile(vaultPath)
+}
+function writeData(rel, vaultPath, text) {
+  const L = dataLayer()
+  return L ? L.write(rel, text) : wrFile(vaultPath, text)
+}
+/** 把库里的旧数据复制进数据层(每库每个 id 一次)。reject 原样往上抛 = 停用;missing = 库里没有,下次启动再试;
+ *  skipped = 数据层里已经有同名、内容不同的文件(多半是新版先写了),留着不盖,告诉用户。返回跳过的个数。 */
+async function importOld(L) {
+  const wf = wfRoot()
+  let skipped = 0
+  for (const im of IMPORTS) {
+    const r = await L.importFromVault({ id: im.id, from: `${wf}/${im.from}`, to: im.to })
+    if (r && Array.isArray(r.skipped)) skipped += r.skipped.length
+  }
+  return skipped
+}
+/** 旧台账并进当前台账:按扫描号 + 操作号去重,旧的排在前面。返回合并后的条目;没有要并的 → null。 */
+function mergeLegacyLedger(cur, legacy) {
+  // 操作号只在一次扫描里唯一:按「扫描号 + 操作号」认同一条
+  const k = (e) => `${e.scanId || ''}\n${e.op}`
+  const have = Object.create(null)
+  for (const e of cur) if (e && e.op) have[k(e)] = true
+  const add = legacy.filter((e) => e && e.op && !have[k(e)])
+  return add.length ? add.concat(cur) : null
+}
+
 /** 三态判定,一个都不许混:`[]` 绝不等于「缺席」(facade 在底层 ipc 缺席时恒 resolve `[]`)。 */
 async function seamState() {
   if (!ctx.app || typeof ctx.app.listPages !== 'function') return { state: 'noSeam', pages: [], msg: '' }
@@ -1358,6 +1468,7 @@ const mounted = new Set()
 const state = {
   loaded: false, queue: null, ledger: { v: 1, entries: [] }, orphans: [],
   seam: null, scanning: false, progress: null, selected: null, halted: false,
+  dataError: null, importNote: null, libKey: '',
   msg: null, diff: null, showFr: false, snapOpen: null, snapText: null,
   fr: { find: '', to: '', caseSensitive: false, wholeWord: false, includeCode: false },
   // ⚠️表单值一律存在 state 里,不靠 DOM:切语言时整棵视图重建,挂在 DOM 上的输入会当场消失
@@ -1380,17 +1491,18 @@ function enqueueWrite(job) {
   return p
 }
 
-async function writeJsonInner(path, obj) {
+async function writeJsonInner(rel, path, obj) {
   const text = JSON.stringify(obj, null, 2)
-  try { await wrFile(path, text) } catch (e) { return false }
-  const back = await rdFile(path)
-  return back === text
+  try {
+    await writeData(rel, path, text)
+    return (await readData(rel, path)) === text
+  } catch (e) { return false }
 }
 function writeQueueInner() {
   if (!state.queue) return Promise.resolve(true)
-  return writeJsonInner(queuePath(), state.queue)
+  return writeJsonInner(QUEUE_REL, queuePath(), state.queue)
 }
-function writeLedgerInner() { return writeJsonInner(ledgerPath(), state.ledger) }
+function writeLedgerInner() { return writeJsonInner(LEDGER_REL, ledgerPath(), state.ledger) }
 
 function normalizeQueue(q) {
   const src = q || {}
@@ -1434,8 +1546,23 @@ function findOrphanSnaps(files, ledger, dir) {
 }
 
 let loadPromise = null
+/** 加载失败(只有新宿主上会发生:数据层读不出来 / 复制旧数据被拒 / 库还没就绪)→ `state.dataError`,
+ *  扫描、批准、回滚一律不动;库没就绪的那种过一会儿自己再试。旧宿主上 loadState 不抛,行为同 1.1.x。 */
 function ensureLoaded() {
-  if (!loadPromise) loadPromise = loadState().catch(() => { state.loaded = true })
+  if (!loadPromise) {
+    loadPromise = loadState().then(() => { state.dataError = null }, (e) => {
+      // 旧宿主:与 1.1.x 一样,加载失败不拦扫描(那时读到的队列照样留着)
+      if (!hasStorage()) { state.loaded = true; return }
+      const wait = !!(e && e.code === 'storage-wait')
+      state.dataError = { wait, msg: errMsg(e) }
+      state.loaded = true
+      loadPromise = null
+      syncStatus()
+      renderAll()
+      if (wait) later(3000).then(() => { if (!disposed && state.dataError && state.dataError.wait) ensureLoaded().then(renderAll, () => {}) })
+      throw e
+    })
+  }
   return loadPromise
 }
 async function readJson(path, dflt) {
@@ -1446,11 +1573,44 @@ async function readJson(path, dflt) {
     return o && typeof o === 'object' ? o : dflt
   } catch { return dflt }
 }
+/** 数据层版:缺文件 → dflt;读失败照样 reject;内容坏了也 reject —— 绝不当空、更不据此写回。 */
+async function readJsonStored(L, rel, dflt) {
+  const raw = await L.readText(rel)
+  if (raw == null) return dflt
+  let o = null
+  try { o = JSON.parse(raw) } catch { o = null }
+  if (!o || typeof o !== 'object') throw new Error(t('msgDataCorrupt', { file: rel }))
+  return o
+}
 async function loadState() {
-  const q = await readJson(queuePath(), null)
-  if (q) state.queue = normalizeQueue(q)
-  const l = await readJson(ledgerPath(), null)
-  if (l && Array.isArray(l.entries)) state.ledger = { v: 1, entries: l.entries }
+  const L = dataLayer()
+  if (L) {
+    const key = libraryKey()
+    const skipped = await importOld(L)
+    state.importNote = skipped ? { key: 'msgImportSkipped', vars: { n: skipped }, bad: false } : null
+    const q = await readJsonStored(L, QUEUE_REL, null)
+    const l = await readJsonStored(L, LEDGER_REL, null)
+    const legacy = await readJsonStored(L, LEGACY_LEDGER_REL, null)
+    if (l && !Array.isArray(l.entries)) throw new Error(t('msgDataCorrupt', { file: LEDGER_REL }))
+    if (legacy && !Array.isArray(legacy.entries)) throw new Error(t('msgDataCorrupt', { file: LEGACY_LEDGER_REL }))
+    let entries = l ? l.entries : []
+    const merged = legacy ? mergeLegacyLedger(entries, legacy.entries) : null
+    if (merged) {
+      const text = JSON.stringify({ v: 1, entries: merged }, null, 2)
+      await L.write(LEDGER_REL, text)
+      if ((await L.readText(LEDGER_REL)) !== text) throw new Error(t('msgDataCorrupt', { file: LEDGER_REL }))
+      entries = merged
+    }
+    state.queue = q ? normalizeQueue(q) : null
+    state.ledger = { v: 1, entries }
+    state.libKey = key
+  } else {
+    // 旧宿主:顺序与 1.1.x 相同(先发布队列,再读台账)
+    const q = await readJson(queuePath(), null)
+    if (q) state.queue = normalizeQueue(q)
+    const l = await readJson(ledgerPath(), null)
+    if (l && Array.isArray(l.entries)) state.ledger = { v: 1, entries: l.entries }
+  }
   await refreshOrphans()
   state.loaded = true
   syncStatus()
@@ -1465,6 +1625,19 @@ const ORPHAN_PROBE_MAX = 200
 async function refreshOrphans() {
   state.orphans = []
   const found = []
+  if (hasStorage()) {
+    // 数据层能直接列目录:当前这一轮的 undo/<扫描号>/ 里有、台账里没有的就是孤儿。列不出来就当不知道。
+    const q = state.queue
+    if (!q || !q.scanId) return
+    try {
+      const L = dataLayer()
+      for (const e of await L.list(`${UNDO_REL}/${q.scanId}`)) if (e && e.kind === 'file') found.push(e.path)
+    } catch { return }
+    // 老台账记的是库内路径,复制进来后同一份快照在 undo/ 下:按数据层路径比,别把它们当孤儿
+    const mapped = { entries: ((state.ledger && state.ledger.entries) || []).map((e) => (e && e.snap ? { ...e, snap: snapRel(e.snap) || e.snap } : e)) }
+    state.orphans = findOrphanSnaps(found.sort(), mapped, UNDO_REL)
+    return
+  }
   // ① 宿主枚举(今天扫不到点目录,留着是为了宿主哪天放开就自动生效,一次 IPC)
   if (ctx.app && typeof ctx.app.listFiles === 'function') {
     try {
@@ -1492,12 +1665,24 @@ async function refreshOrphans() {
 
 // ══ 扫描 ═════════════════════════════════════════════════════════════════════
 /** job:`null` = 常规规则;`{find,…}` = 查找替换;`{tagOp:{…}}` = 标签操作。三者互斥,一次扫描只跑一类。 */
+/** 新宿主:换了库,内存里的队列 / 台账是上一个库的 —— 丢掉重读,别把它写进新库。返回 true = 刚换过库。 */
+function libraryChanged() {
+  if (!hasStorage() || !state.libKey || state.libKey === libraryKey()) return false
+  state.queue = null
+  state.ledger = { v: 1, entries: [] }
+  state.orphans = []
+  state.libKey = ''
+  state.loaded = false
+  loadPromise = null
+  return true
+}
 function runScan(job) {
+  libraryChanged()
   if (state.scanning) return Promise.resolve()
   return ensureLoaded().then(() => runScanInner(job)).catch((e) => {
     state.scanning = false
     state.progress = null
-    state.seam = { state: 'seamError', pages: [], msg: errMsg(e) }
+    if (!state.dataError) state.seam = { state: 'seamError', pages: [], msg: errMsg(e) }
     renderAll()
   })
 }
@@ -1606,6 +1791,8 @@ async function runScanInner(job) {
 function applyProposal(p) { return enqueueWrite(() => applyProposalInner(p)) }
 async function applyProposalInner(p) {
   if (!p) return { ok: false, key: 'msgReadFail' }
+  if (state.dataError) return { ok: false, key: 'msgDataError', vars: { msg: state.dataError.msg } }
+  if (libraryChanged()) { ensureLoaded().then(renderAll, () => {}); return { ok: false, key: 'msgLibraryChanged' } }
   if (state.halted) return { ok: false, key: 'msgHalted' }
   // 0. 活动页闸:**零写入**(连提案状态与 queue.json 都不动),提案保持 open,用户关掉笔记还能再点
   if (blockedByActivePage(p.path)) return { ok: false, key: 'msgActivePage', vars: { path: p.path } }
@@ -1635,10 +1822,10 @@ async function applyProposalInner(p) {
     return { ok: true, key: 'msgNoChange' }
   }
   // 4. 写快照 → 立即读回逐字节比对;不一致则一个字节都不碰目标文件
-  const snap = snapPath((state.queue && state.queue.scanId) || 's-0', p.id)
+  const snap = snapRef((state.queue && state.queue.scanId) || 's-0', p.id)
   try {
-    await wrFile(snap, fresh)
-    const back = await rdFile(snap)
+    await writeSnap(snap, fresh)
+    const back = await readSnap(snap)
     if (back !== fresh) throw new Error('snapshot readback mismatch')
   } catch (e) {
     p.state = 'failed'
@@ -1705,6 +1892,8 @@ async function applyProposalInner(p) {
 function rollbackOp(entry) { return enqueueWrite(() => rollbackOpInner(entry)) }
 async function rollbackOpInner(entry) {
   if (!entry) return { ok: false, key: 'msgRollbackNoFile' }
+  if (state.dataError) return { ok: false, key: 'msgDataError', vars: { msg: state.dataError.msg } }
+  if (libraryChanged()) { ensureLoaded().then(renderAll, () => {}); return { ok: false, key: 'msgLibraryChanged' } }
   // 活动页闸:回滚同样是整文件覆写,同一张脸,同样零写入
   if (blockedByActivePage(entry.path)) return { ok: false, key: 'msgActivePage', vars: { path: entry.path } }
   // ⚠️`state.halted` **刻意不挡回滚**:硬失败之后用户最需要的恰恰是把文件还原回去,而回滚写的是
@@ -1724,7 +1913,8 @@ async function rollbackOpInner(entry) {
     }
     return { ok: false, key: 'msgRollbackChanged' }
   }
-  const snap = await rdFile(entry.snap)
+  let snap = null
+  try { snap = await readSnap(entry.snap, entry.preHash) } catch (e) { return { ok: false, key: 'msgRollbackFail', vars: { msg: errMsg(e) } } }
   if (snap == null) return { ok: false, key: 'msgRollbackNoSnap' }
   if (hashText(snap) !== entry.preHash) return { ok: false, key: 'msgRollbackBadSnap' }
   try { await wrFile(entry.path, snap) } catch (e) { return { ok: false, key: 'msgRollbackFail', vars: { msg: errMsg(e) } } }
@@ -1892,7 +2082,7 @@ function renderInbox(root) {
 
   const bar = div('vg-bar')
   const scanBtn = btn(state.scanning ? t('btnScanning') : t('btnScan'), 'vg-btn primary', () => { runScan(null) })
-  scanBtn.disabled = !!state.scanning
+  scanBtn.disabled = !!state.scanning || !!state.dataError
   tip(scanBtn, t('wfHint', { wf: wfRoot() }))
   bar.appendChild(scanBtn)
   const frBtn = btn(t('frTitle'), 'vg-btn', () => {
@@ -1926,6 +2116,7 @@ function renderInbox(root) {
 
   if (state.showFr) root.appendChild(renderFrForm())
   if (state.showTagOp) root.appendChild(renderTagOpForm())
+  renderDataNotes(root)
 
   if (state.msg) {
     const note = div('vg-note' + (state.msg.bad ? ' bad' : ''), t(state.msg.key, state.msg.vars))
@@ -1972,6 +2163,21 @@ function renderInbox(root) {
     }
   }
   root.appendChild(tsec)
+}
+/** 插件数据文件夹的状态:读不出来 / 库没就绪(停用,带重试)、旧数据有没复制进来的。inbox 与 history 都画。 */
+function renderDataNotes(root) {
+  if (state.dataError) {
+    const note = div('vg-note' + (state.dataError.wait ? '' : ' bad'), state.dataError.wait ? t('msgStorageWait') : t('msgDataError', { msg: state.dataError.msg }))
+    if (!state.dataError.wait) {
+      note.appendChild(btn(t('btnRetry'), 'vg-btn sm', () => {
+        state.dataError = null
+        renderAll()
+        ensureLoaded().then(renderAll, () => {})
+      }))
+    }
+    root.appendChild(note)
+  }
+  if (state.importNote) root.appendChild(div('vg-note', t(state.importNote.key, state.importNote.vars)))
 }
 function proposalRow(p) {
   const row = div('vg-item' + (p.id === state.selected ? ' on' : ''))
@@ -2143,10 +2349,11 @@ function writeReport() {
       if (pages && pages.indexOf(path) >= 0) throw new Error('report exists but could not be read')
     }
     if (old != null && old !== md) {
-      const snap = `${undoDir()}/reports/${day}-${Date.now()}.snap`
-      await wrFile(snap, old)
-      if ((await rdFile(snap)) !== old) throw new Error('report snapshot verify failed')
-      snapped = snap
+      const name = `${day}-${Date.now()}.snap`
+      const snap = hasStorage() ? `${UNDO_REL}/reports/${name}` : `${undoDir()}/reports/${name}`
+      await writeSnap(snap, old)
+      if ((await readSnap(snap)) !== old) throw new Error('report snapshot verify failed')
+      snapped = hasStorage() ? t('storagePath', { path: snap }) : snap
     }
     await wrFile(path, md)
     const back = await rdFile(path)
@@ -2283,6 +2490,7 @@ function renderHistory(root) {
   root.textContent = ''
   root.appendChild(el('h2', 'vg-h', t('histTitle')))
   if (state.msg) root.appendChild(div('vg-note' + (state.msg.bad ? ' bad' : ''), t(state.msg.key, state.msg.vars)))
+  renderDataNotes(root)
   const entries = (state.ledger && state.ledger.entries) || []
   const unfinished = entries.filter((e) => e.status === 'writing' || e.status === 'ledger-unconfirmed')
   if (unfinished.length) {
@@ -2355,7 +2563,7 @@ function toggleSnap(e) {
   state.snapOpen = e.op
   state.snapText = null
   renderAll()
-  rdFile(e.snap).then((s) => {
+  readSnap(e.snap).then((s) => {
     if (state.snapOpen !== e.op) return
     state.snapText = s
     renderAll()
@@ -2444,6 +2652,7 @@ if (globalThis.__VAULT_GARDENER_TEST__) {
     queuePath, ledgerPath, snapPath, reportPath, undoDir, pendingCount, loadDiff, mountView, renderView,
     hitCount, later, writeReport, applyProposalInner, rollbackOpInner,
     activePagePath, blockedByActivePage, ACTIVE_UNKNOWN,
+    mergeLegacyLedger,
     scanFmTags, tagOpTarget, tagOpHits, applyTagOps, dedupeFmTags, validateTagName, validateTagOpSpec,
   })
 }
